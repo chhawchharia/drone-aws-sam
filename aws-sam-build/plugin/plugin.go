@@ -6,7 +6,6 @@ package plugin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,13 +24,14 @@ type Args struct {
 	BuildImage              string `envconfig:"PLUGIN_BUILD_IMAGE"`
 	TemplateFilePath        string `envconfig:"PLUGIN_TEMPLATE_FILE_PATH"`
 	BuildCommandOptions     string `envconfig:"PLUGIN_BUILD_COMMAND_OPTIONS"`
+	ContainerEnvVarFile     string `envconfig:"PLUGIN_CONTAINER_ENV_VAR_FILE"`
 	PrivateRegistryURL      string `envconfig:"PLUGIN_PRIVATE_REGISTRY_URL"`
 	PrivateRegistryUsername string `envconfig:"PLUGIN_PRIVATE_REGISTRY_USERNAME"`
 	PrivateRegistryPassword string `envconfig:"PLUGIN_PRIVATE_REGISTRY_PASSWORD"`
 }
 
 // Exec executes the plugin.
-func Exec(ctx context.Context, args Args) (err error) {
+func Exec(ctx context.Context, args Args) error {
 	if args.TemplateFilePath == "" {
 		if _, err := os.Stat("./template.yaml"); err == nil {
 			args.TemplateFilePath = "./template.yaml"
@@ -50,6 +50,9 @@ func Exec(ctx context.Context, args Args) (err error) {
 
 	// Include the template file path
 	commandArgs = append(commandArgs, "--template-file", args.TemplateFilePath)
+	if args.ContainerEnvVarFile != "" {
+		commandArgs = append(commandArgs, "--container-env-var-file", args.ContainerEnvVarFile)
+	}
 
 	// Add the build command options by parsing them correctly respecting quotes
 	if args.BuildCommandOptions != "" {
@@ -60,20 +63,16 @@ func Exec(ctx context.Context, args Args) (err error) {
 		commandArgs = append(commandArgs, options...)
 	}
 
-	commandArgs, cleanup, err := prepareContainerEnvFile(commandArgs)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, cleanup()) }()
-
 	if args.PrivateRegistryURL != "" {
 		if err := loginToPrivateRegistry(ctx, args); err != nil {
 			return err
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...)
-	cmd.Env = childEnvironment()
+	cmd, err := samCommand(ctx, commandArgs[1:])
+	if err != nil {
+		return err
+	}
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

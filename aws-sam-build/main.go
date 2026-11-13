@@ -6,6 +6,9 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/harness-community/aws-sam-build/plugin"
 
@@ -15,11 +18,23 @@ import (
 
 func main() {
 	logrus.SetFormatter(new(formatter))
+	if err := run(); err != nil {
+		logrus.Fatalln(err)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	var args plugin.Args
 	if err := envconfig.Process("", &args); err != nil {
-		logrus.Fatalln(err)
+		return err
 	}
+	// Drop consumed secret settings from future environment lookups and children.
+	// Unsetenv cannot erase Linux's initial /proc/<pid>/environ memory region.
+	_ = os.Unsetenv("PLUGIN_PRIVATE_REGISTRY_PASSWORD")
+	_ = os.Unsetenv("PLUGIN_BUILD_COMMAND_OPTIONS")
 
 	switch args.Level {
 	case "debug":
@@ -30,14 +45,13 @@ func main() {
 		logrus.SetLevel(logrus.TraceLevel)
 	}
 
-	if err := plugin.Exec(context.Background(), args); err != nil {
-		logrus.Fatalln(err)	
-	}
+	return plugin.Exec(ctx, args)
 }
 
 // default formatter that writes logs without including timestamp
 // or level information.
-type formatter struct {}
+type formatter struct{}
+
 func (*formatter) Format(entry *logrus.Entry) ([]byte, error) {
 	return []byte(entry.Message), nil
 }
