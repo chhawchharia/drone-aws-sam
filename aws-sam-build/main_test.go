@@ -72,13 +72,12 @@ def cli():
 			for {
 				if contents, err := os.ReadFile(ready); err == nil {
 					var present map[string]bool
-					if json.Unmarshal(contents, &present) != nil {
-						continue
+					if json.Unmarshal(contents, &present) == nil {
+						if present["password_present"] || present["options_present"] {
+							t.Fatal("entry point leaked consumed credential settings")
+						}
+						break
 					}
-					if present["password_present"] || present["options_present"] {
-						t.Fatal("entry point leaked consumed credential settings")
-					}
-					break
 				}
 				select {
 				case err := <-done:
