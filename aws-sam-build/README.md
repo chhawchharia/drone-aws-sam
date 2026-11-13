@@ -27,6 +27,46 @@ This plugin enables building AWS Serverless Application Model (SAM) applications
 - If you're using a private image, provide `PRIVATE_REGISTRY_URL`, `PRIVATE_REGISTRY_USERNAME`, and `PRIVATE_REGISTRY_PASSWORD`.
 - If you're running this plugin in a kubernetes pod and using a custom docker build image, make sure to mount the path `/var/run/docker.sock`.
 
+### Credential handling
+
+The existing plugin settings are unchanged. Registry login supplies the password
+to `docker login --password-stdin`; the password is not a Docker command argument.
+
+Inline build variables supplied through `BUILD_COMMAND_OPTIONS` using `-e` or
+`--container-env-var` are moved into a temporary SAM JSON environment file. The
+plugin passes only its path using `--container-env-var-file`. The file has mode
+`0600` inside a private `0700` directory and is removed when the build returns,
+including on login failure, build failure, or context cancellation. The original
+`PLUGIN_PRIVATE_REGISTRY_PASSWORD` and `PLUGIN_BUILD_COMMAND_OPTIONS` settings are
+not inherited by Docker and SAM subprocesses.
+
+Existing environment JSON files and TOML/YAML `samconfig` files are supported.
+Variables retain SAM's precedence: resource-specific inline values, resource-
+specific file values, global inline values, then global file values. Existing
+files are not rewritten. When necessary, a temporary copy of the selected SAM
+configuration prevents shadowed config variables from becoming active after the
+inline command arguments are removed.
+
+`--save-params` and configuration-based `save_params` remain supported. SAM saves
+against the private config copy; the plugin restores the original inline option
+values and environment-file selection before saving the result at the original
+config location with mode `0600`. No saved parameter references the temporary
+credential file. As with SAM's existing behavior, explicitly saving parameters
+also persists any inline credential values in that configuration file.
+
+These changes address command-argument exposure. Docker's unencrypted credential
+storage warning is separate: use a Docker credential helper/store if credentials
+must not be saved as reversible data in Docker's `config.json`. Build variables
+remain environment variables in the build container and can be inspected by
+processes with sufficient Docker daemon or container access. Builds and their
+tools must continue to avoid printing secret values.
+
+### Development
+
+Building this module requires Go 1.21 or later. Run `go test ./...` and
+`go test -race ./plugin` to check the plugin, including its credential transport
+and temporary-file lifecycle.
+
 ## Plugin Image
 
 The plugin `plugins/aws-sam-build` is available for the following architectures:
