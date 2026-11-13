@@ -6,9 +6,11 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/google/shlex"
 )
@@ -29,18 +31,12 @@ type Args struct {
 }
 
 // Exec executes the plugin.
-func Exec(ctx context.Context, args Args) error {
+func Exec(ctx context.Context, args Args) (err error) {
 	if args.TemplateFilePath == "" {
 		if _, err := os.Stat("./template.yaml"); err == nil {
 			args.TemplateFilePath = "./template.yaml"
 		} else if _, err := os.Stat("./template.yml"); err == nil {
 			args.TemplateFilePath = "./template.yml"
-		}
-	}
-
-	if args.PrivateRegistryURL != "" {
-		if err := loginToPrivateRegistry(args); err != nil {
-			return err
 		}
 	}
 
@@ -64,7 +60,20 @@ func Exec(ctx context.Context, args Args) error {
 		commandArgs = append(commandArgs, options...)
 	}
 
+	commandArgs, cleanup, err := prepareContainerEnvFile(commandArgs)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, cleanup()) }()
+
+	if args.PrivateRegistryURL != "" {
+		if err := loginToPrivateRegistry(ctx, args); err != nil {
+			return err
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, commandArgs[0], commandArgs[1:]...)
+	cmd.Env = childEnvironment()
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -76,17 +85,21 @@ func Exec(ctx context.Context, args Args) error {
 	return nil
 }
 
-func loginToPrivateRegistry(args Args) error {
+func loginToPrivateRegistry(ctx context.Context, args Args) error {
 	if args.PrivateRegistryUsername == "" || args.PrivateRegistryPassword == "" {
 		return fmt.Errorf("private registry credentials not provided")
 	}
-	cmd := exec.Command("docker", "login", args.PrivateRegistryURL, "--username", args.PrivateRegistryUsername, "--password", args.PrivateRegistryPassword)
+	cmd := exec.CommandContext(ctx, "docker", "login", args.PrivateRegistryURL, "--username", args.PrivateRegistryUsername, "--password-stdin")
+	cmd.Stdin = strings.NewReader(args.PrivateRegistryPassword)
+	cmd.Env = childEnvironment()
 	output, err := cmd.CombinedOutput()
+	// A registry error must not echo its credential into the plugin's logs.
+	message := strings.ReplaceAll(string(output), args.PrivateRegistryPassword, "[REDACTED]")
 	if err != nil {
-		return fmt.Errorf("error executing command: %v\nOutput:\n%s", err, output)
+		return fmt.Errorf("error executing registry login: %v\nOutput:\n%s", err, message)
 	}
 
-	fmt.Println(string(output))
+	fmt.Println(message)
 	return nil
 
 }
